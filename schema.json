@@ -1,0 +1,12 @@
+{
+    "entities": {
+      "Candidate": ["name", "email", "experience"],
+      "Skill": ["name"],
+      "Job": ["title", "company", "description"]
+    },
+    "relationships": {
+      "HAS_SKILL": { "from": "Candidate", "to": "Skill" },
+      "REQUIRES_SKILL": { "from": "Job", "to": "Skill" }
+    }
+  }
+  

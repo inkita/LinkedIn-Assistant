@@ -1,0 +1,12 @@
+Jane Doe
+Email: jane.doe@example.com
+
+Summary:
+Machine-learning engineer with 5+ years experience.
+
+Skills:
+PYTHON, Natural Language Processing, Pytorch, ml ops
+
+Experience:
+- Built NLP pipelines in Python and PyTorch
+- Deployed models with MLOps workflows
