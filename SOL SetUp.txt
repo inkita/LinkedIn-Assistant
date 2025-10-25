@@ -1,0 +1,96 @@
+SOL SetUp
+
+# Step 1: Go to home directory
+cd ~
+
+# Step 2: Download micromamba binary
+curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj bin/micromamba
+
+# Step 3: Add micromamba to environment paths
+echo 'export MAMBA_ROOT_PREFIX=$HOME/micromamba' >> ~/.bashrc
+echo 'export PATH=$HOME/bin:$PATH' >> ~/.bashrc
+source ~/.bashrc
+
+# Step 4: Initialize micromamba shell
+eval "$(micromamba shell hook --shell bash)"
+
+# Step 5: Create Python 3.11 environment
+micromamba create -y -n liassist python=3.11
+
+# Step 6: Activate environment
+micromamba activate liassist
+
+
+# INSTALL DEPENDENCIES
+-----------------------------------------------------------------------------------------------------
+# Upgrade base packages
+pip install -U pip wheel setuptools
+
+# Install project dependencies
+pip install pandas numpy requests sentence-transformers \
+            langgraph langchain neo4j PyPDF2 python-docx \
+            pymupdf pdfminer.six transformers accelerate \
+            torch --index-url https://download.pytorch.org/whl/cu121
+
+
+# MODEL ENV VARIABLES
+---------------------------------------------------------------------------------------------------------
+# Go to project root
+cd ~/Desktop/LinkedIn-Assistant-feat-KG-Builder
+
+
+export HF_HOME="/home/amohan78/Desktop/LinkedIn-Assistant-feat-KG-Builder/Models"
+export TRANSFORMERS_CACHE="$HF_HOME/transformers"
+export HF_LLM_MODEL="Qwen/Qwen2.5-0.5B-Instruct"
+mkdir -p "$TRANSFORMERS_CACHE"
+
+# DOWNLOAD THE MODEL - IN TERMINAL EXECUTE THE FOLLOWING
+----------------------------------------------------------------------------------------------------------------
+python - <<'PY'
+import os
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+model_id = os.environ.get("HF_LLM_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+cache_dir = os.environ.get("HF_HOME", "./Models")
+
+print(f"🚀 Downloading model: {model_id}")
+print(f"📦 Cache directory: {cache_dir}")
+
+tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir)
+model = AutoModelForCausalLM.from_pretrained(
+    model_id,
+    cache_dir=cache_dir,
+    device_map="auto",        # puts model on GPU if available
+    torch_dtype="auto"
+)
+
+print("\n✅ Model and tokenizer successfully downloaded.")
+print(f"✅ Files stored under: {cache_dir}")
+PY
+---------------------------------------------------------------------------------------------------------------
+
+Neo4j Setup
+
+Open AuraDB Browser & add constraints (in Aura)
+
+Go to https://console.neo4j.io
+ → select your instance → “Open with Neo4j Browser”.
+
+Log in with your Aura creds (rotate your password if you haven’t already).
+
+Run these once:
+
+CREATE CONSTRAINT skill_name IF NOT EXISTS
+FOR (s:Skill) REQUIRE s.name IS UNIQUE;
+
+CREATE CONSTRAINT candidate_email IF NOT EXISTS
+FOR (c:Candidate) REQUIRE c.email IS UNIQUE;
+
+CREATE CONSTRAINT job_id IF NOT EXISTS
+FOR (j:Job) REQUIRE j.job_id IS UNIQUE;
+
+
+IN TERMINAL:
+export NEO4J_URI="neo4j+s://d0ee583f.databases.neo4j.io"
+export NEO4J_USER="neo4j"
+export NEO4J_PASSWORD="qA4mwmqaJbdqQ8BQwU2xUhMnNjG5_OJc01IcXJMc4sU"
