@@ -1,6 +1,7 @@
 # parse_resume.py
 import os
 import pandas as pd
+from ollama_extractor import _extract_years_of_experience
 
 def _read_txt(path: str) -> str:
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -102,6 +103,28 @@ def parse_resume(file_path: str):
             email = str(row.get("Email", "")).strip() if "Email" in df.columns else None
             domain = str(row.get("Category", "")).strip() if "Category" in df.columns else ""
             
+            # Extract experience from experience column if present
+            experience = ""
+            experience_years = 0
+            if "Experience" in df.columns:
+                experience_raw = row.get("Experience", "")
+                # Handle if it's already a number
+                if isinstance(experience_raw, (int, float)):
+                    experience_years = int(experience_raw)
+                    experience = f"{int(experience_raw)} years"
+                else:
+                    experience = str(experience_raw).strip()
+                    experience_years = _extract_years_of_experience(experience)
+            elif "experience" in df.columns:
+                experience_raw = row.get("experience", "")
+                # Handle if it's already a number
+                if isinstance(experience_raw, (int, float)):
+                    experience_years = int(experience_raw)
+                    experience = f"{int(experience_raw)} years"
+                else:
+                    experience = str(experience_raw).strip()
+                    experience_years = _extract_years_of_experience(experience)
+            
             # Skip if no text content
             if not text or len(text.strip()) < 10:
                 continue
@@ -110,7 +133,9 @@ def parse_resume(file_path: str):
                 "text": text,
                 "name": name,
                 "email": email,
-                "domain": domain
+                "domain": domain,
+                "experience": experience,
+                "experience_years": experience_years
             })
         
         if not resumes:

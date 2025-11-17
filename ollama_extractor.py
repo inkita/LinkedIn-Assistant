@@ -55,13 +55,158 @@ def _is_soft_skill(skill: str) -> bool:
     
     return False
 
+def _extract_years_of_experience(text) -> int:
+    """
+    Extract years of experience from text and return as integer.
+    Examples: "3+ years" -> 3, "5 years experience" -> 5, "10+ years" -> 10
+    Returns 0 if no valid years found.
+    
+    Handles string, list, or other types by converting to string first.
+    """
+    if not text:
+        return 0
+    
+    # Convert to string if it's not already
+    if isinstance(text, list):
+        # If it's a list, join it or take the first element
+        text = " ".join(str(item) for item in text) if text else ""
+    elif not isinstance(text, str):
+        text = str(text)
+    
+    if not text:
+        return 0
+    
+    import re
+    # Pattern to match years: "3+ years", "5 years", "10+ years experience", "2-5 years", etc.
+    patterns = [
+        r'(\d+)\s*\+\s*years?',  # "3+ years", "5+ years"
+        r'(\d+)\s*years?\s*(?:of\s*)?experience',  # "5 years experience", "3 years of experience"
+        r'minimum\s*(\d+)\s*years?',  # "minimum 3 years"
+        r'at\s*least\s*(\d+)\s*years?',  # "at least 5 years"
+        r'(\d+)\s*-\s*(\d+)\s*years?',  # "2-5 years", "3-7 years" (take minimum)
+        r'(\d+)\s+to\s+(\d+)\s*years?',  # "2 to 5 years", "3 to 7 years" (take minimum)
+        r'(\d+)\s*years?',  # "5 years" (more general, check last)
+    ]
+    
+    text_lower = text.lower()
+    for pattern in patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            try:
+                # Handle range patterns (e.g., "2-5 years")
+                if len(match.groups()) > 1:
+                    # For ranges, take the minimum (first number)
+                    years = int(match.group(1))
+                else:
+                    years = int(match.group(1))
+                return years
+            except (ValueError, IndexError):
+                continue
+    
+    # Try to find standalone numbers that might represent years
+    # Look for numbers between 1-50 that could be years
+    numbers = re.findall(r'\b([1-9]|[1-4][0-9]|50)\b', text_lower)
+    if numbers:
+        # If there's a number near "year" or "experience", use it
+        if 'year' in text_lower or 'experience' in text_lower:
+            try:
+                return int(numbers[0])
+            except ValueError:
+                pass
+    
+    return 0
+
+
+def _normalize_education(education_text) -> str:
+    """
+    Normalize education to only: "bachelor's", "master's", or "phd".
+    Returns empty string if no valid education level found.
+    
+    Handles string, list, or other types by converting to string first.
+    """
+    if not education_text:
+        return ""
+    
+    # Convert to string if it's not already
+    if isinstance(education_text, list):
+        # If it's a list, join it or take the first element
+        education_text = " ".join(str(item) for item in education_text) if education_text else ""
+    elif not isinstance(education_text, str):
+        education_text = str(education_text)
+    
+    if not education_text:
+        return ""
+    
+    import re
+    education_lower = education_text.lower().strip()
+    
+    # Patterns for bachelor's
+    bachelor_patterns = [
+        r"bachelor",
+        r"b\.?s\.?",
+        r"b\.?a\.?",
+        r"b\.?e\.?",
+        r"b\.?tech",
+        r"undergraduate",
+        r"bsc",
+        r"bs\b"
+    ]
+    
+    # Patterns for master's
+    master_patterns = [
+        r"master",
+        r"m\.?s\.?",
+        r"m\.?a\.?",
+        r"m\.?e\.?",
+        r"m\.?tech",
+        r"mba",
+        r"msc",
+        r"ms\b",
+        r"m\.?eng"
+    ]
+    
+    # Patterns for phd
+    phd_patterns = [
+        r"ph\.?d\.?",
+        r"doctorate",
+        r"d\.?phil",
+        r"phd\b"
+    ]
+    
+    # Check for phd first (most specific)
+    for pattern in phd_patterns:
+        if re.search(pattern, education_lower):
+            return "phd"
+    
+    # Check for master's
+    for pattern in master_patterns:
+        if re.search(pattern, education_lower):
+            return "master's"
+    
+    # Check for bachelor's
+    for pattern in bachelor_patterns:
+        if re.search(pattern, education_lower):
+            return "bachelor's"
+    
+    return ""
+
+
 def _classify_domain(text: str, existing_domain: str = "") -> str:
     """
     Classify domain as 'sales' or 'technology' based on content.
     Returns 'sales', 'technology', or empty string if unclear.
     """
     if not text:
+        # Convert existing_domain to string if it's a list
+        if isinstance(existing_domain, list):
+            existing_domain = " ".join(str(item) for item in existing_domain) if existing_domain else ""
+        elif not isinstance(existing_domain, str):
+            existing_domain = str(existing_domain) if existing_domain else ""
         return existing_domain.lower() if existing_domain else ""
+    
+    # Ensure text is a string
+    if not isinstance(text, str):
+        text = str(text)
     
     text_lower = text.lower()
     
@@ -167,24 +312,47 @@ def _get_models(timeout=3):
             f"Cannot reach Ollama at {BASE}. Is it running? ({e})"
         )
 
-def _post(path, payload, timeout=(3, 45)):
+def _post(path, payload, timeout=(3, 120), max_retries=2):
     """
     Try /api/generate first; if 404, fall back to /api/chat
     so we work across different Ollama builds/routes.
+    
+    Includes retry logic for timeout errors.
     """
+    import time
+    
     url = f"{BASE}{path}"
-    r = requests.post(url, json=payload, timeout=timeout)
-    if r.status_code == 404 and path == "/api/generate":
-        # Fallback to chat-style endpoint
-        chat_payload = {
-            "model": payload["model"],
-            "messages": [{"role": "user", "content": payload["prompt"]}],
-            "stream": False,
-            "options": payload.get("options", {}),
-        }
-        r = requests.post(f"{BASE}/api/chat", json=chat_payload, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+    
+    for attempt in range(max_retries + 1):
+        try:
+            r = requests.post(url, json=payload, timeout=timeout)
+            if r.status_code == 404 and path == "/api/generate":
+                # Fallback to chat-style endpoint
+                chat_payload = {
+                    "model": payload["model"],
+                    "messages": [{"role": "user", "content": payload["prompt"]}],
+                    "stream": False,
+                    "options": payload.get("options", {}),
+                }
+                r = requests.post(f"{BASE}/api/chat", json=chat_payload, timeout=timeout)
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.Timeout as e:
+            if attempt < max_retries:
+                wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s
+                print(f"  ⚠ Ollama timeout (attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                # Increase timeout for retry
+                timeout = (timeout[0], timeout[1] + 30)  # Add 30s to read timeout
+            else:
+                raise RuntimeError(
+                    f"Ollama request timed out after {max_retries + 1} attempts. "
+                    f"The model may be too slow or the input too large. "
+                    f"Consider using a faster model or reducing input size."
+                ) from e
+        except requests.exceptions.RequestException as e:
+            # For other errors, don't retry
+            raise
 
 def _ollama_generate(prompt: str, model: str = OLLAMA_MODEL, maxtokens: int = 512) -> str:
     # Ensure the model exists (clearer error than a vague 404)
@@ -195,6 +363,11 @@ def _ollama_generate(prompt: str, model: str = OLLAMA_MODEL, maxtokens: int = 51
             f"Install it: `ollama pull {model}`. Installed: {sorted(models)}"
         )
 
+    # Get timeout from environment or use default (connect: 3s, read: 120s)
+    connect_timeout = int(os.getenv("OLLAMA_CONNECT_TIMEOUT", "3"))
+    read_timeout = int(os.getenv("OLLAMA_READ_TIMEOUT", "120"))
+    timeout = (connect_timeout, read_timeout)
+
     payload = {
         "model": model,
         "prompt": prompt,
@@ -202,7 +375,7 @@ def _ollama_generate(prompt: str, model: str = OLLAMA_MODEL, maxtokens: int = 51
         "options": {"num_predict": maxtokens},
     }
 
-    data = _post("/api/generate", payload)
+    data = _post("/api/generate", payload, timeout=timeout)
     # Normalize response shape between /generate and /chat
     if "response" in data:
         return (data["response"] or "").strip()
@@ -281,6 +454,32 @@ def extract_from_resume(text: str):
         data.setdefault("education", "")
         data.setdefault("skills", [])
         
+        # Convert experience to string if it's a list or other type
+        experience_raw = data.get("experience", "")
+        if isinstance(experience_raw, list):
+            experience_text = " ".join(str(item) for item in experience_raw) if experience_raw else ""
+        elif not isinstance(experience_raw, str):
+            experience_text = str(experience_raw) if experience_raw else ""
+        else:
+            experience_text = experience_raw
+        
+        # Extract years of experience from experience text
+        experience_years = _extract_years_of_experience(experience_text)
+        data["experience_years"] = experience_years  # Store as integer
+        
+        # Convert education to string if it's a list or other type
+        education_raw = data.get("education", "")
+        if isinstance(education_raw, list):
+            education_text = " ".join(str(item) for item in education_raw) if education_raw else ""
+        elif not isinstance(education_raw, str):
+            education_text = str(education_raw) if education_raw else ""
+        else:
+            education_text = education_raw
+        
+        # Normalize education to only: bachelor's, master's, or phd
+        normalized_education = _normalize_education(education_text)
+        data["education"] = normalized_education  # Replace with normalized value
+        
         # Filter out soft skills and clean up skills list
         original_skills = data.get("skills", [])
         if original_skills:
@@ -294,7 +493,7 @@ def extract_from_resume(text: str):
     except Exception as e:
         print(f"Warning: Failed to parse resume extraction: {e}")
         print(f"Raw output: {out[:200]}")
-        return {"name": None, "email": None, "experience": "", "education": "", "skills": []}
+        return {"name": None, "email": None, "experience": "", "experience_years": 0, "education": "", "skills": []}
 
 def extract_from_job(job: dict):
     prompt = (
@@ -303,11 +502,16 @@ def extract_from_job(job: dict):
         'Schema: {\n'
         '  "skills": ["skill1", "skill2", ...],\n'
         '  "location": "string or empty string",\n'
-        '  "experience": "string requirements or empty string (e.g., "3+ years", "5 years experience")",\n'
+        '  "experience": "REQUIRED - Extract years of experience requirement as a string (e.g., "3+ years", "5 years experience", "minimum 2 years", "2-5 years", "at least 4 years"). If no experience requirement is mentioned, return empty string.",\n'
         '  "education": "string requirements or empty string (e.g., "Bachelor\'s degree", "Master\'s in Computer Science")",\n'
         '  "posting_date": "YYYY-MM-DD format or empty string",\n'
         '  "domain": "MUST be either "sales" or "technology" based on the job description. Classify the job as sales-related (sales, account management, business development) or technology-related (software, engineering, IT, data science). Return empty string if unclear."\n'
         '}\n\n'
+        "EXPERIENCE EXTRACTION - IMPORTANT:\n"
+        "- Look for phrases like: 'X years', 'X+ years', 'minimum X years', 'at least X years', 'X-Y years', 'X to Y years'\n"
+        "- Extract the full experience requirement text exactly as written (e.g., '3+ years', '5 years of experience', 'minimum 2 years')\n"
+        "- If the job mentions experience in ranges (e.g., '2-5 years'), extract the minimum value or the full range\n"
+        "- If no experience requirement is specified, return empty string\n\n"
         "SKILLS EXTRACTION RULES - Extract ONLY technical/hard skills required for the job:\n"
         "INCLUDE:\n"
         "- Programming languages: Python, Java, JavaScript, TypeScript, C++, C#, Go, Rust, Ruby, PHP, Swift, Kotlin, etc.\n"
@@ -376,6 +580,52 @@ def extract_from_job(job: dict):
         data.setdefault("posting_date", "")
         data.setdefault("domain", "")
         
+        # Convert location to string if it's a list or other type
+        location_raw = data.get("location", "")
+        if isinstance(location_raw, list):
+            data["location"] = " ".join(str(item) for item in location_raw) if location_raw else ""
+        elif not isinstance(location_raw, str):
+            data["location"] = str(location_raw) if location_raw else ""
+        
+        # Convert posting_date to string if it's a list or other type
+        posting_date_raw = data.get("posting_date", "")
+        if isinstance(posting_date_raw, list):
+            data["posting_date"] = " ".join(str(item) for item in posting_date_raw) if posting_date_raw else ""
+        elif not isinstance(posting_date_raw, str):
+            data["posting_date"] = str(posting_date_raw) if posting_date_raw else ""
+        
+        # Convert experience to string if it's a list or other type
+        experience_raw = data.get("experience", "")
+        if isinstance(experience_raw, list):
+            experience_text = " ".join(str(item) for item in experience_raw) if experience_raw else ""
+        elif not isinstance(experience_raw, str):
+            experience_text = str(experience_raw) if experience_raw else ""
+        else:
+            experience_text = experience_raw
+        
+        # Extract years of experience from experience text
+        experience_years = _extract_years_of_experience(experience_text)
+        data["experience_years"] = experience_years  # Store as integer
+        
+        # Debug logging: show what was extracted for jobs
+        if experience_text and experience_years == 0:
+            print(f"  ⚠ Warning: Could not extract years from job experience text: '{experience_text[:100]}'")
+        elif experience_text:
+            print(f"  ✓ Extracted job experience: '{experience_text[:50]}' -> {experience_years} years")
+        
+        # Convert education to string if it's a list or other type
+        education_raw = data.get("education", "")
+        if isinstance(education_raw, list):
+            education_text = " ".join(str(item) for item in education_raw) if education_raw else ""
+        elif not isinstance(education_raw, str):
+            education_text = str(education_raw) if education_raw else ""
+        else:
+            education_text = education_raw
+        
+        # Normalize education to only: bachelor's, master's, or phd
+        normalized_education = _normalize_education(education_text)
+        data["education"] = normalized_education  # Replace with normalized value
+        
         # Filter out soft skills and clean up skills list
         original_skills = data.get("skills", [])
         if original_skills:
@@ -387,7 +637,14 @@ def extract_from_job(job: dict):
         
         # Classify and validate domain
         job_description = f"{job.get('title', '')} {job.get('description', '')}"
-        extracted_domain = data.get("domain", "").strip().lower()
+        # Convert domain to string if it's a list or other type
+        domain_raw = data.get("domain", "")
+        if isinstance(domain_raw, list):
+            extracted_domain = " ".join(str(item) for item in domain_raw).strip().lower() if domain_raw else ""
+        elif not isinstance(domain_raw, str):
+            extracted_domain = str(domain_raw).strip().lower() if domain_raw else ""
+        else:
+            extracted_domain = domain_raw.strip().lower()
         classified_domain = _classify_domain(job_description, extracted_domain)
         
         # Only allow "sales" or "technology"
@@ -400,4 +657,4 @@ def extract_from_job(job: dict):
     except Exception as e:
         print(f"Warning: Failed to parse job extraction: {e}")
         print(f"Raw output: {out[:200]}")
-        return {"skills": [], "location": "", "experience": "", "education": "", "posting_date": "", "domain": ""}
+        return {"skills": [], "location": "", "experience": "", "experience_years": 0, "education": "", "posting_date": "", "domain": ""}

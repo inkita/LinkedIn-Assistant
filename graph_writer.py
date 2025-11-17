@@ -28,8 +28,19 @@ class GraphWriter:
     def close(self):
         self.driver.close()
 
-    def merge_candidate(self, name, email, experience=None, education=None, skills=None):
-        """Merge candidate with all schema fields."""
+    def merge_candidate(self, name, email, experience_years=None, education=None, skills=None):
+        """Merge candidate with all schema fields.
+        
+        Args:
+            name: Candidate name
+            email: Candidate email (required, used as unique identifier)
+            experience_years: Years of experience as integer (0 if not provided)
+            education: Normalized education level: "bachelor's", "master's", "phd", or empty string
+            skills: List of canonical skill names
+        
+        Returns:
+            str: Candidate ID (UUID) from the knowledge graph
+        """
         if skills is None:
             skills = []
         
@@ -42,13 +53,27 @@ class GraphWriter:
         # Clean up values
         email = str(email).strip() if email else None
         name = str(name).strip() if name else "Unknown Candidate"
-        experience = str(experience).strip() if experience else ""
-        education = str(education).strip() if education else ""
+        
+        # Convert experience_years to integer (default to 0)
+        if experience_years is None:
+            experience_years = 0
+        try:
+            experience_years = int(experience_years)
+        except (ValueError, TypeError):
+            experience_years = 0
+        
+        # Normalize education - only allow: bachelor's, master's, phd, or empty
+        if education:
+            education_lower = str(education).strip().lower()
+            if education_lower not in ["bachelor's", "master's", "phd"]:
+                education = ""  # Set to empty if not one of the allowed values
+        else:
+            education = ""
         
         if not email:
             raise ValueError("Email cannot be empty after cleaning")
         
-        print(f"  Merging candidate: name='{name}', email='{email}'")
+        print(f"  Merging candidate: name='{name}', email='{email}', experience_years={experience_years}, education='{education}'")
         
         with self.driver.session() as session:
             # Generate ID for new candidates
@@ -61,23 +86,33 @@ class GraphWriter:
                     "ON CREATE SET c.id = $id, "
                     "            c.name = $name, "
                     "            c.email = $email, "
-                    "            c.experience = $experience, "
+                    "            c.experience = $experience_years, "
                     "            c.education = $education "
                     "ON MATCH SET c.name = COALESCE(c.name, $name), "
-                    "            c.experience = COALESCE(c.experience, $experience), "
+                    "            c.experience = COALESCE(c.experience, $experience_years), "
                     "            c.education = COALESCE(c.education, $education) "
                     "RETURN c.email as email, c.name as name, c.id as id",
                     id=candidate_id,
                     name=name,
                     email=email,
-                    experience=experience,
+                    experience_years=experience_years,
                     education=education
                 )
                 record = result.single()
+                candidate_id = None
                 if record:
-                    print(f"  ✓ Candidate merged/updated: {record['name']} ({record['email']}) [ID: {record['id']}]")
+                    candidate_id = record['id']
+                    print(f"  ✓ Candidate merged/updated: {record['name']} ({record['email']}) [ID: {candidate_id}]")
                 else:
                     print(f"  ⚠ Warning: Candidate merge completed but no record returned")
+                    # Try to get the ID by querying with email
+                    id_result = session.run(
+                        "MATCH (c:Candidate {email: $email}) RETURN c.id as id",
+                        email=email
+                    )
+                    id_record = id_result.single()
+                    if id_record:
+                        candidate_id = id_record['id']
             except Exception as e:
                 print(f"  ✗ Error merging candidate: {e}")
                 import traceback
@@ -132,10 +167,36 @@ class GraphWriter:
                 print(f"  ✓ Added {skills_added} skill(s) to candidate")
             if skills_failed > 0:
                 print(f"  ⚠ Failed to add {skills_failed} skill(s) to candidate")
+            
+            # Final fallback: if candidate_id is still None, query by email
+            if not candidate_id:
+                id_result = session.run(
+                    "MATCH (c:Candidate {email: $email}) RETURN c.id as id",
+                    email=email
+                )
+                id_record = id_result.single()
+                if id_record:
+                    candidate_id = id_record['id']
+            
+            return candidate_id
 
-    def merge_job(self, title, company, location=None, experience=None, education=None, 
+    def merge_job(self, title, company, location=None, experience_years=None, education=None, 
                   posting_date=None, domain=None, skills=None):
-        """Merge job with all schema fields."""
+        """Merge job with all schema fields.
+        
+        Args:
+            title: Job title
+            company: Company name
+            location: Job location (optional)
+            experience_years: Years of experience required as integer (0 if not provided)
+            education: Normalized education level: "bachelor's", "master's", "phd", or empty string
+            posting_date: Posting date (optional)
+            domain: Domain classification: "sales", "technology", or None
+            skills: List of canonical skill names
+        
+        Returns:
+            str: Job ID (UUID) from the knowledge graph
+        """
         if skills is None:
             skills = []
         
@@ -144,6 +205,22 @@ class GraphWriter:
             domain_lower = domain.lower().strip()
             if domain_lower not in ["sales", "technology"]:
                 domain = None  # Don't set domain if it's not one of the allowed values
+        
+        # Convert experience_years to integer (default to 0)
+        if experience_years is None:
+            experience_years = 0
+        try:
+            experience_years = int(experience_years)
+        except (ValueError, TypeError):
+            experience_years = 0
+        
+        # Normalize education - only allow: bachelor's, master's, phd, or empty
+        if education:
+            education_lower = str(education).strip().lower()
+            if education_lower not in ["bachelor's", "master's", "phd"]:
+                education = ""  # Set to empty if not one of the allowed values
+        else:
+            education = ""
         
         with self.driver.session() as session:
             # Generate ID if not provided
@@ -160,27 +237,44 @@ class GraphWriter:
                 )
             
             # Merge job
-            session.run(
+            result = session.run(
                 "MERGE (j:Job {title: $title, company: $company}) "
                 "ON CREATE SET j.id = $id, "
                 "            j.title = $title, "
                 "            j.company = $company, "
                 "            j.location = $location, "
-                "            j.experience = $experience, "
+                "            j.experience = $experience_years, "
                 "            j.education = $education, "
                 "            j.posting_date = $posting_date "
                 "ON MATCH SET j.location = COALESCE(j.location, $location), "
-                "            j.experience = COALESCE(j.experience, $experience), "
+                "            j.experience = COALESCE(j.experience, $experience_years), "
                 "            j.education = COALESCE(j.education, $education), "
-                "            j.posting_date = COALESCE(j.posting_date, $posting_date)",
+                "            j.posting_date = COALESCE(j.posting_date, $posting_date) "
+                "RETURN j.id as id",
                 id=job_id,
                 title=title,
                 company=company,
                 location=location or "",
-                experience=experience or "",
-                education=education or "",
+                experience_years=experience_years,
+                education=education,
                 posting_date=posting_date or ""
             )
+            record = result.single()
+            returned_job_id = None
+            if record:
+                returned_job_id = record['id']
+            else:
+                # Fallback: query by title and company
+                id_result = session.run(
+                    "MATCH (j:Job {title: $title, company: $company}) RETURN j.id as id",
+                    title=title,
+                    company=company
+                )
+                id_record = id_result.single()
+                if id_record:
+                    returned_job_id = id_record['id']
+                else:
+                    returned_job_id = job_id  # Use the generated ID
             
             # Link job to domain if provided and valid
             if domain:
@@ -209,3 +303,5 @@ class GraphWriter:
                     company=company,
                     skill_norm=skill
                 )
+            
+            return returned_job_id

@@ -122,11 +122,12 @@ def n_extract_resume(state: State) -> State:
                 data = extract_from_resume(text)
                 if not isinstance(data, dict):
                     log(f"  Warning: Extraction returned non-dict for resume {idx+1}, using defaults")
-                    data = {"name": None, "email": None, "experience": "", "education": "", "skills": []}
+                    data = {"name": None, "email": None, "experience": "", "experience_years": 0, "education": "", "skills": []}
                 
                 data.setdefault("name", None)
                 data.setdefault("email", None)
                 data.setdefault("experience", "")
+                data.setdefault("experience_years", 0)
                 data.setdefault("education", "")
                 data.setdefault("skills", [])
                 
@@ -135,6 +136,25 @@ def n_extract_resume(state: State) -> State:
                     data["name"] = parsed_name
                 if parsed_email:
                     data["email"] = parsed_email
+                
+                # Prioritize experience from file column over LLM extraction
+                parsed_experience = resume_data.get("experience", "")
+                parsed_years = resume_data.get("experience_years", 0)
+                extracted_experience = data.get("experience", "")
+                extracted_years = data.get("experience_years", 0)
+                
+                # Use parsed experience from file if available, otherwise use extracted
+                if parsed_experience or parsed_years > 0:
+                    data["experience"] = parsed_experience
+                    data["experience_years"] = parsed_years
+                    log(f"  Using experience from file: '{parsed_experience[:50]}' -> {parsed_years} years")
+                elif extracted_experience or extracted_years > 0:
+                    data["experience"] = extracted_experience
+                    data["experience_years"] = extracted_years
+                    log(f"  Using experience from LLM extraction: '{extracted_experience[:50]}' -> {extracted_years} years")
+                else:
+                    data["experience"] = ""
+                    data["experience_years"] = 0
                 
                 # Classify domain from resume content (validate parsed domain if provided)
                 from ollama_extractor import _classify_domain
@@ -153,11 +173,15 @@ def n_extract_resume(state: State) -> State:
                 resume_domain = _classify_domain(text, parsed_domain)
                 if resume_domain not in ["sales", "technology"]:
                     resume_domain = ""
+                # Get experience from file if available
+                parsed_experience = resume_data.get("experience", "")
+                parsed_years = resume_data.get("experience_years", 0)
                 extractions.append({
                     "name": parsed_name,
                     "email": parsed_email,
                     "domain": resume_domain,
-                    "experience": "",
+                    "experience": parsed_experience,
+                    "experience_years": parsed_years,
                     "education": "",
                     "skills": []
                 })
@@ -277,10 +301,11 @@ def n_extract_jobs(state: State) -> State:
     for job in jobs:
         j = extract_from_job(job)
         if not isinstance(j, dict):
-            j = {"skills": [], "location": "", "experience": "", "education": "", "posting_date": "", "domain": ""}
+            j = {"skills": [], "location": "", "experience": "", "experience_years": 0, "education": "", "posting_date": "", "domain": ""}
         j.setdefault("skills", [])
         j.setdefault("location", "")
         j.setdefault("experience", "")
+        j.setdefault("experience_years", 0)
         j.setdefault("education", "")
         j.setdefault("posting_date", "")
         j.setdefault("domain", "")
@@ -288,7 +313,24 @@ def n_extract_jobs(state: State) -> State:
         j["title"] = job.get("title", "")
         j["company"] = job.get("company", "")
         j["location"] = j.get("location") or job.get("location", "")
-        j["experience"] = j.get("experience") or job.get("experience", "")
+        # Prioritize experience from file column over LLM extraction
+        parsed_experience = job.get("experience", "")
+        parsed_years = job.get("experience_years", 0)
+        extracted_experience = j.get("experience", "")
+        extracted_years = j.get("experience_years", 0)
+        
+        # Use parsed experience from file if available, otherwise use extracted
+        if parsed_experience or parsed_years > 0:
+            j["experience"] = parsed_experience
+            j["experience_years"] = parsed_years
+            log(f"  Using experience from file: '{parsed_experience[:50]}' -> {parsed_years} years")
+        elif extracted_experience or extracted_years > 0:
+            j["experience"] = extracted_experience
+            j["experience_years"] = extracted_years
+            log(f"  Using experience from LLM extraction: '{extracted_experience[:50]}' -> {extracted_years} years")
+        else:
+            j["experience"] = ""
+            j["experience_years"] = 0
         j["education"] = j.get("education") or job.get("education", "")
         j["posting_date"] = j.get("posting_date") or job.get("posting_date", "")
         # Support both domain and category for backward compatibility
@@ -388,13 +430,13 @@ def n_write_graph(state: State) -> State:
             if not name or name == "null" or name == "":
                 name = f"Unknown Candidate {idx+1}"
             
-            experience = cand.get("experience", "") if cand else ""
+            experience_years = cand.get("experience_years", 0) if cand else 0
             education = cand.get("education", "") if cand else ""
             
-            log(f"  Adding candidate {idx+1}/{len(resume_extractions)}: name='{name}', email='{email}', skills_count={len(cskills)}")
+            log(f"  Adding candidate {idx+1}/{len(resume_extractions)}: name='{name}', email='{email}', experience_years={experience_years}, education='{education}', skills_count={len(cskills)}")
             
             try:
-                writer.merge_candidate(name, email, experience, education, cskills)
+                writer.merge_candidate(name, email, experience_years, education, cskills)
                 candidates_added += 1
                 log(f"  ✓ Successfully added candidate {idx+1}: {name} ({email})")
             except Exception as e:
@@ -435,14 +477,14 @@ def n_write_graph(state: State) -> State:
         if not name or name == "null" or name == "":
             name = "Unknown Candidate"
         
-        experience = cand.get("experience", "") if cand else ""
+        experience_years = cand.get("experience_years", 0) if cand else 0
         education = cand.get("education", "") if cand else ""
         cskills = state.get("canonical_resume_skills", []) or []
         
-        log(f"Adding candidate: name='{name}', email='{email}', skills_count={len(cskills)}")
+        log(f"Adding candidate: name='{name}', email='{email}', experience_years={experience_years}, education='{education}', skills_count={len(cskills)}")
         
         try:
-            writer.merge_candidate(name, email, experience, education, cskills)
+            writer.merge_candidate(name, email, experience_years, education, cskills)
             results["candidate_skills"] = cskills
             results["candidate_added"] = True
             results["candidate_email"] = email
@@ -473,7 +515,7 @@ def n_write_graph(state: State) -> State:
             title = job_extraction.get("title", "")
             company = job_extraction.get("company", "")
             location = job_extraction.get("location", "")
-            experience = job_extraction.get("experience", "")
+            experience_years = job_extraction.get("experience_years", 0)
             education = job_extraction.get("education", "")
             posting_date = job_extraction.get("posting_date", "")
             domain = job_extraction.get("domain", "")
@@ -485,7 +527,7 @@ def n_write_graph(state: State) -> State:
             skills = canonical_jobs_skills[idx] if 0 <= idx < len(canonical_jobs_skills) else []
             
             if title and company:
-                writer.merge_job(title, company, location, experience, education, posting_date, domain, skills)
+                writer.merge_job(title, company, location, experience_years, education, posting_date, domain, skills)
                 jobs_written += 1
         results["jobs_written"] = jobs_written
     else:

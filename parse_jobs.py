@@ -1,5 +1,6 @@
 import pandas as pd
 import os
+from ollama_extractor import _extract_years_of_experience
 
 def parse_jobs(file_path):
     """Parse jobs from CSV or XLSX file.
@@ -44,6 +45,20 @@ def parse_jobs(file_path):
                 "location": str(row.get("location", "")).strip() if "location" in df.columns else "",
                 "posting_date": str(row.get("posted_date", "")).strip() if "posted_date" in df.columns else ""
             }
+            # Extract experience from experience column if present
+            if "experience" in df.columns:
+                experience_raw = row.get("experience", "")
+                # Handle if it's already a number
+                if isinstance(experience_raw, (int, float)):
+                    job["experience_years"] = int(experience_raw)
+                    job["experience"] = f"{int(experience_raw)} years"
+                else:
+                    experience_text = str(experience_raw).strip()
+                    job["experience"] = experience_text
+                    job["experience_years"] = _extract_years_of_experience(experience_text)
+            else:
+                job["experience"] = ""
+                job["experience_years"] = 0
         else:
             # Legacy CSV format support
             job = {
@@ -55,7 +70,18 @@ def parse_jobs(file_path):
             if "Location" in df.columns:
                 job["location"] = str(row.get("Location", "")).strip()
             if "Experience" in df.columns:
-                job["experience"] = str(row.get("Experience", "")).strip()
+                experience_raw = row.get("Experience", "")
+                # Handle if it's already a number
+                if isinstance(experience_raw, (int, float)):
+                    job["experience_years"] = int(experience_raw)
+                    job["experience"] = f"{int(experience_raw)} years"
+                else:
+                    experience_text = str(experience_raw).strip()
+                    job["experience"] = experience_text
+                    job["experience_years"] = _extract_years_of_experience(experience_text)
+            else:
+                job["experience"] = ""
+                job["experience_years"] = 0
             if "Education" in df.columns:
                 job["education"] = str(row.get("Education", "")).strip()
             if "Posting Date" in df.columns or "PostingDate" in df.columns:
