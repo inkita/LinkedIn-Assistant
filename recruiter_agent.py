@@ -6,9 +6,9 @@ import os
 import pandas as pd # Still needed if you use it elsewhere, but not for file creation here
 
 # --- Neo4j Configuration ---
-NEO4J_URI = "neo4j+s://d0ee583f.databases.neo4j.io"  # CHANGE THIS
-NEO4J_USER = "neo4j"                 # CHANGE THIS
-NEO4J_PASSWORD = "qA4mwmqaJbdqQ8BQwU2xUhMnNjG5_OJc01IcXJMc4sU"          # CHANGE THIS
+NEO4J_URI="neo4j+s://dc47a5a0.databases.neo4j.io"
+NEO4J_USER="neo4j"    
+NEO4J_PASSWORD="KJEHHJM1abMuYdu6WzpR2oBx5ue8P1JJtcbM7A7eWck"         # CHANGE THIS
 # ---------------------------
 
 # Class definition for JobAgent remains identical (no changes needed inside the class)
