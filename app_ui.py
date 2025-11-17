@@ -4,143 +4,146 @@ import pandas as pd
 import os
 import tempfile
 
-# Import all necessary components
 from recruiter_agent import JobAgent, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 from candidate_agent import CandidateAgent
-from jd_parser import extract_skills_from_jd 
+from jd_parser import extract_skills_from_jd
 
-# --- Agent Initialization (using Streamlit caching for persistence) ---
 
+# --- Agent Initialization ---
 @st.cache_resource
 def get_job_agent():
-    """Initializes and caches the JobAgent connection to Neo4j."""
     try:
-        agent = JobAgent(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
-        return agent
+        return JobAgent(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
     except Exception as e:
-        st.error(f"Failed to connect JobAgent to Neo4j: {e}")
+        st.error(f"Failed to initialize JobAgent: {e}")
         st.stop()
-        return None
 
 @st.cache_resource
 def get_candidate_agent():
-    """Initializes and caches the CandidateAgent connection to Neo4j."""
     try:
-        agent = CandidateAgent(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
-        return agent
+        return CandidateAgent(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
     except Exception as e:
-        st.error(f"Failed to connect Candidate Agent to Neo4j: {e}")
-        return None
+        st.error(f"Failed to initialize CandidateAgent: {e}")
+        st.stop()
+
 
 # --- Main Streamlit App ---
-
 def main():
-    st.set_page_config(page_title="Recruiter Agent System Test UI", layout="wide")
+    st.set_page_config(page_title="Recruiter Agent System", layout="wide")
     st.title("🤖 Recruiter Agent System Interface")
-    
+
     job_agent = get_job_agent()
     candidate_agent = get_candidate_agent()
 
-    # -------------------------------------------------------------------
-    # Sidebar for Data Ingestion Controls
-    # -------------------------------------------------------------------
+    # -------------------------
+    # Sidebar - Data Ingestion
+    # -------------------------
     st.sidebar.header("Data Ingestion")
-    
-    # 1. Job Description Upload
+
+    # Upload Job Data
     st.sidebar.subheader("1. Ingest Job Data")
-    uploaded_job_file = st.sidebar.file_uploader(
-        "Upload jobs_augmented.xlsx", type=["xlsx", "xls"], key="job_upload"
-    )
+    uploaded_job_file = st.sidebar.file_uploader("Upload jobs_augmented.xlsx", type=["xlsx", "xls"], key="job_upload")
     if uploaded_job_file is not None and st.sidebar.button("Upload Jobs to Neo4j"):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_file:
             tmp_file.write(uploaded_job_file.getvalue())
             file_path = tmp_file.name
-            
-        with st.spinner(f"Processing and uploading {uploaded_job_file.name}..."):
+        with st.spinner(f"Uploading {uploaded_job_file.name} to Neo4j..."):
             processed_count = job_agent.upload_job_descriptions(file_path)
-            
         if processed_count > 0:
-            st.success(f"✅ Successfully uploaded {processed_count} jobs to the Knowledge Graph!")
+            st.success(f"✅ Uploaded {processed_count} jobs to Neo4j!")
         else:
-            st.warning("⚠️ Job upload failed or zero jobs processed. See console.")
+            st.warning("⚠️ Job upload failed or zero processed.")
         os.unlink(file_path)
 
-    # 2. Candidate Data Upload (Mock)
+    # Upload Candidate Data
     st.sidebar.subheader("2. Ingest Candidate Data")
-    uploaded_resume_file = st.sidebar.file_uploader(
-        "Upload resumes_augmented.xlsx", type=["xlsx", "xls"], key="resume_upload"
-    )
+    uploaded_resume_file = st.sidebar.file_uploader("Upload resumes_augmented.xlsx", type=["xlsx", "xls"], key="resume_upload")
     if uploaded_resume_file is not None and st.sidebar.button("Upload Candidates to Neo4j"):
-        # --- CRITICAL: Define your Excel column mapping here ---
         COLUMNS_MAP = {
-            'ID': 'candidate_id', 
-            'Full Name': 'name', 
-            'Skills_List': 'skills', 
-            'Email_Address': 'email', 
+            'ID': 'candidate_id',
+            'Full Name': 'name',
+            'Skills_List': 'skills',
+            'Email_Address': 'email',
             'Location_City': 'location'
         }
-        # -----------------------------------------------------
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_file:
             tmp_file.write(uploaded_resume_file.getvalue())
             file_path = tmp_file.name
-            
-        with st.spinner(f"Processing and uploading {uploaded_resume_file.name}..."):
+        with st.spinner(f"Uploading {uploaded_resume_file.name} to Neo4j..."):
             processed_count = candidate_agent.upload_candidates(file_path, COLUMNS_MAP)
-            
         if processed_count > 0:
-            st.success(f"✅ Successfully uploaded {processed_count} candidates to the Knowledge Graph!")
+            st.success(f"✅ Uploaded {processed_count} candidates!")
         else:
-            st.warning("⚠️ Candidate upload failed or zero candidates processed.")
+            st.warning("⚠️ Candidate upload failed or zero processed.")
         os.unlink(file_path)
 
-    # -------------------------------------------------------------------
-    # Main Area for Testing Search
-    # -------------------------------------------------------------------
+    # -------------------------
+    # Search Section
+    # -------------------------
     st.header("Search Agent Test: Find Candidates for a JD")
-    
+    st.subheader("Job Context")
+
+    col1, col2 = st.columns([2, 2])
+    with col1:
+        company_name = st.text_input("Company Name", placeholder="e.g., Microsoft")
+        job_title = st.text_input("Job Title", placeholder="e.g., Senior Backend Engineer")
+    with col2:
+        experience = st.number_input("Experience (years)", min_value=0, max_value=50, value=0, step=1)
+        location = st.text_input("Location", placeholder="e.g., Remote / San Francisco")
+
     user_input = st.text_area(
-        "Paste Full Job Description Here:", 
-        height=300, 
-        placeholder="e.g., The Economic Development & Planning Intern will provide..."
+        "Paste Full Job Description Here:",
+        height=300,
+        placeholder="Paste the full job description text here..."
     )
-    
+
     if st.button("Run Candidate Search"):
         if not user_input.strip():
-            st.warning("Please paste a job description to search.")
+            st.warning("Please paste a job description first.")
             return
 
-        # 1. PARSE JOB DESCRIPTION (LLM Agent)
-        with st.spinner("🤖 Step 1: Extracting required skills from JD..."):
-            required_skills = extract_skills_from_jd(user_input)
-            st.subheader("Extracted Required Skills:")
-            st.code(required_skills)
-        
+        # Combine structured context
+        parser_input = (
+            f"Company: {company_name or 'N/A'}\n"
+            f"Job Title: {job_title or 'N/A'}\n"
+            f"Experience (years): {int(experience)}\n"
+            f"Location: {location or 'N/A'}\n\n"
+            f"Job Description:\n{user_input}"
+        )
+
+        # Step 1: Extract skills
+        with st.spinner("🤖 Extracting required skills from JD..."):
+            try:
+                required_skills = extract_skills_from_jd(parser_input)
+            except Exception as e:
+                st.error(f"Parser error: {e}")
+                return
+
+        st.subheader("Extracted Required Skills:")
+        st.code(required_skills)
+
+        # Uncomment this line if you ever want to debug what was sent to parser:
+        # st.expander("🔍 Parser Input (for debugging)").text(parser_input)
+
         if not required_skills:
-            st.error("❌ Failed to extract any skills. Cannot proceed with search.")
+            st.warning("❌ No skills extracted — check parser output.")
             return
 
-        # 2. CANDIDATE SEARCH (Neo4j Agent with Standard Logic)
-        with st.spinner("🔍 Step 2: Searching Neo4j Knowledge Graph for matches..."):
+        # Step 2: Search for candidates
+        with st.spinner("🔍 Searching Neo4j for best candidate matches..."):
             results = candidate_agent.search_candidates_by_skills(required_skills, max_results=10)
-        
-        # 3. DISPLAY RESULTS (Improved Scoring, simplified columns)
-        st.subheader(f"Top Candidate Matches (Ranked by Skill Count):")
-        
-        if results:
-            df_results = pd.DataFrame(results)
-            
-            # --- UPDATED DISPLAY COLUMNS (Removed Avg Fuzzy Dist) ---
-            df_results['Skill Match Count'] = df_results['matchedSkillsCount'].astype(int) 
-            df_results['Match Score (%)'] = (df_results['Skill Match Count'] / len(required_skills) * 100).round(1)
-            
-            df_results = df_results.rename(columns={'skills': 'Candidate Skills'})
-            # Display only the relevant columns
-            st.dataframe(df_results[['name', 'location', 'Skill Match Count', 'Match Score (%)', 'Candidate Skills']])
-            # -------------------------------------------------------------
-            
-            st.success(f"✅ Found {len(results)} potential candidates!")
-        else:
+
+        st.subheader("Top Candidate Matches (Ranked by Skill Count):")
+        if not results:
             st.warning("No candidates found matching the required skills.")
+        else:
+            df_results = pd.DataFrame(results)
+            df_results['Skill Match Count'] = df_results['matchedSkillsCount'].astype(int)
+            total_skills = len(required_skills) if isinstance(required_skills, list) and required_skills else 1
+            df_results['Match Score (%)'] = (df_results['Skill Match Count'] / total_skills * 100).round(1)
+            df_results = df_results.rename(columns={'skills': 'Candidate Skills'})
+            st.dataframe(df_results[['name', 'location', 'Skill Match Count', 'Match Score (%)', 'Candidate Skills']])
+            st.success(f"✅ Found {len(results)} candidate(s)!")
 
 if __name__ == "__main__":
     main()
