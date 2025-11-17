@@ -18,7 +18,7 @@ Relationships:
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install langchain langgraph neo4j pandas sentence-transformers python-dotenv requests python-docx PyMuPDF pdfminer.six openpyxl beautifulsoup4
+pip install langchain langgraph neo4j pandas sentence-transformers python-dotenv requests python-docx PyMuPDF pdfminer.six openpyxl beautifulsoup4 fastapi uvicorn
 ```
 
 **Note**: 
@@ -33,10 +33,12 @@ The `.env` file is already configured with AuraDB credentials. It contains:
 - `NEO4J_PASSWORD` - AuraDB password
 - `OLLAMA_HOST` - Ollama host (default: 127.0.0.1)
 - `OLLAMA_MODEL` - Model to use (default: llama3.2:3b)
-- `RESUME_PATH` - (Optional) Path to resume file
-- `JOBS_PATH` - (Optional) Path to jobs file (CSV or XLSX)
+- `RESUME_PATH` - (Optional) Path to resume XLSX file - **only needed if running `main.py` directly**
+- `JOBS_PATH` - (Optional) Path to jobs XLSX file - **only needed if running `main.py` directly**
 
-**Note**: At least one of `RESUME_PATH` or `JOBS_PATH` must be provided when running.
+**Note**: 
+- If using the **service API** (`service.py`), you don't need `RESUME_PATH` or `JOBS_PATH` in `.env` - files are uploaded via API
+- If running **`main.py` directly**, at least one of `RESUME_PATH` or `JOBS_PATH` must be provided
 
 ### 3. Set Up Ollama
 
@@ -86,6 +88,101 @@ Then run:
 ```bash
 python main.py
 ```
+
+## Running as a Service (API)
+
+The KG Builder can be run as an HTTP API service that other applications can call.
+
+**Note:** The API service accepts **only XLSX files** (.xlsx or .xls) for both resumes and jobs.
+
+### Start the Service
+
+```bash
+# Using uvicorn directly
+uvicorn service:api_app --host 0.0.0.0 --port 8000
+
+# Or run the service file directly
+python service.py
+
+# With custom host/port (via environment variables)
+SERVICE_HOST=0.0.0.0 SERVICE_PORT=8000 python service.py
+```
+
+The service will be available at: `http://localhost:8000`
+
+### API Endpoints
+
+**Health Check:**
+```bash
+curl http://localhost:8000/health
+```
+
+**Process Resume:**
+```bash
+curl -X POST "http://localhost:8000/process/resume" \
+  -F "file=@path/to/resumes.xlsx"
+```
+
+**Process Jobs:**
+```bash
+curl -X POST "http://localhost:8000/process/jobs" \
+  -F "file=@path/to/jobs.xlsx"
+```
+
+**Process Both:**
+```bash
+curl -X POST "http://localhost:8000/process" \
+  -F "resume_file=@path/to/resumes.xlsx" \
+  -F "jobs_file=@path/to/jobs.xlsx"
+```
+
+### Using from Another Directory/Application
+
+Once the service is running, you can call it from any other application using HTTP requests:
+
+**Python Example:**
+```python
+import requests
+
+# Process resume (XLSX file only)
+with open('resumes.xlsx', 'rb') as f:
+    response = requests.post(
+        'http://localhost:8000/process/resume',
+        files={'file': f}
+    )
+    result = response.json()
+    print(result)
+
+# Process jobs (XLSX file only)
+with open('jobs.xlsx', 'rb') as f:
+    response = requests.post(
+        'http://localhost:8000/process/jobs',
+        files={'file': f}
+    )
+    result = response.json()
+    print(result)
+```
+
+**JavaScript/Node.js Example:**
+```javascript
+const FormData = require('form-data');
+const fs = require('fs');
+const axios = require('axios');
+
+// Process resume (XLSX file only)
+const form = new FormData();
+form.append('file', fs.createReadStream('resumes.xlsx'));
+
+axios.post('http://localhost:8000/process/resume', form, {
+  headers: form.getHeaders()
+}).then(response => {
+  console.log(response.data);
+});
+```
+
+**API Documentation:**
+- Interactive API docs: `http://localhost:8000/docs` (Swagger UI)
+- ReDoc: `http://localhost:8000/redoc`
 
 ## Input Files
 
