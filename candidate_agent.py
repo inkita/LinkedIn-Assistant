@@ -145,67 +145,149 @@ class CandidateAgent:
 
     def search_candidates_by_skills(self, required_skills, max_results: int = 10, debug: bool = False) -> List[Dict[str, Any]]:
         """
-        Finds and ranks candidates based on the number of matching skills.
-
-        Matching logic (for each required skill vs each candidate skill):
-          - normalize both (lowercase, strip punctuation)
-          - consider a match if:
-              * norm(required) == norm(candidate_skill)
-              * norm(required) in norm(candidate_skill) OR norm(candidate_skill) in norm(required)
-              * at least one token overlaps (token intersection)
-        Returns list of dicts:
-          { id, name, location, matchedSkillsCount, skills }
+        New DB-side scoring implementation (replaces Python in-memory matching).
+        - Uses a weighted scoring algorithm (exact, alias, substring, token overlap)
+        - Applies a rarity/popularity adjustment
+        - Requires at least one matched skill (filters out zero-overlap candidates)
+        Returns list of dicts similar to previous output:
+          { id, name, location, matchedSkillsCount, skills, raw_score, normalized_score }
         """
-        # Normalize input & ensure list
+        # Normalize input to a list of strings
         if not required_skills:
             return []
 
-        # If a single string is provided, try to parse it into a list
         if isinstance(required_skills, str):
             required_skills = _ensure_skill_list(required_skills)
 
-        # Guarantee list of non-empty strings
         required_skills = [str(s).strip() for s in required_skills if s and str(s).strip()]
         if not required_skills:
             return []
 
-        # Precompute normalized required skills
-        norm_required = [ _normalize_text(s) for s in required_skills ]
+        # Build and run the portable Cypher (no APOC dependency)
+        # Implementation follows the scoring described earlier:
+        # base weights: exact(3.0), alias(2.5), substring(1.5), token_overlap(1.0)
+        # rarity = 1 / (1 + ln(1 + popularity))
+        query = """
+        WITH [s IN $skills WHERE s IS NOT NULL | toLower(trim(s))] AS reqs
+        UNWIND reqs AS _
+        WITH collect(distinct _) AS reqs
+
+        MATCH (c:Candidate)-[:HAS_SKILL]->(sk:Skill)
+        WITH c, collect(DISTINCT sk) AS candSkills, reqs
+
+        WITH c, candSkills, reqs,
+             [sk IN candSkills |
+                { name: sk.name,
+                  norm: coalesce(sk.norm_name, toLower(trim(sk.name))),
+                  aliases: coalesce(sk.aliases, []),
+                  popularity: size((sk)<-[:HAS_SKILL]-())
+                }
+             ] AS skillObjs
+
+        UNWIND skillObjs AS so
+        WITH c, so, reqs,
+             CASE
+               WHEN any(r IN reqs WHERE so.norm = r) THEN 3.0
+               WHEN any(r IN reqs WHERE any(a IN so.aliases WHERE toLower(trim(a)) = r)) THEN 2.5
+               WHEN any(r IN reqs WHERE r IN so.norm OR so.norm IN r) THEN 1.5
+               WHEN any(r IN reqs WHERE size([t IN split(so.norm,' ') WHERE t IN split(r,' ')]) > 0) THEN 1.0
+               ELSE 0.0
+             END AS base_weight
+
+        WITH c, so, base_weight,
+             CASE WHEN base_weight > 0.0 THEN base_weight * (1.0 / (1.0 + log(1.0 + toFloat(coalesce(so.popularity,0))))) ELSE 0.0 END AS adjusted_weight,
+             CASE WHEN base_weight > 0.0 THEN so.name ELSE null END AS matched_skill_name,
+             so.name AS all_name
+
+        WITH c, collect(adjusted_weight) AS adj_weights, [x IN collect(matched_skill_name) WHERE x IS NOT NULL] AS matchedSkillNames, collect(all_name) AS allSkillNames
+        WHERE size(matchedSkillNames) > 0
+
+        WITH c, reduce(acc = 0.0, w IN adj_weights | acc + w) AS raw_score, size(matchedSkillNames) AS matchedSkillsCount, matchedSkillNames AS matchedSkills, allSkillNames AS allSkills
+        RETURN c.candidate_id AS id,
+               c.name AS name,
+               c.location AS location,
+               matchedSkillsCount,
+               raw_score,
+               raw_score / (CASE WHEN size($skills) > 0 THEN size($skills) ELSE 1 END) AS normalized_score,
+               matchedSkills AS matchedSkills,
+               allSkills AS allSkills
+        ORDER BY raw_score DESC
+        LIMIT $limit
+        """
+
+        params = {"skills": required_skills, "limit": max_results}
+
+        if debug:
+            print("DEBUG: running DB-side scoring query with params:", params)
+
+        with self._driver.session() as session:
+            try:
+                result = session.run(query, **params)
+                rows = [r.data() for r in result]
+            except Exception as e:
+                # on error, fallback to the original in-memory matching to preserve behavior
+                if debug:
+                    print(f"DB scoring query failed ({e}), falling back to Python matching.")
+                return self._fallback_python_match(required_skills, max_results, debug)
+
+        # Map results to the previous output shape (id, name, location, matchedSkillsCount, skills)
+        out = []
+        for r in rows:
+            out.append({
+                "id": r.get("id"),
+                "name": r.get("name"),
+                "location": r.get("location"),
+                "matchedSkillsCount": int(r.get("matchedSkillsCount", 0)),
+                # return allSkills as the candidate's skill list (original names)
+                "skills": r.get("allSkills", []),
+                # extended scoring fields
+                "raw_score": float(r.get("raw_score", 0.0)),
+                "normalized_score": float(r.get("normalized_score", 0.0)),
+                "matchedSkills": r.get("matchedSkills", [])
+            })
+
+        return out
+
+    def _fallback_python_match(self, required_skills, max_results: int = 10, debug: bool = False) -> List[Dict[str, Any]]:
+        """
+        Original in-Python matching logic kept as a fallback in case DB-side query fails.
+        """
+        # This is the previous implementation (kept here to preserve behavior)
+        if isinstance(required_skills, str):
+            required_skills = _ensure_skill_list(required_skills)
+
+        required_skills = [str(s).strip() for s in required_skills if s and str(s).strip()]
+        if not required_skills:
+            return []
+
+        norm_required = [_normalize_text(s) for s in required_skills]
         if debug:
             print("DEBUG: required_skills:", required_skills)
             print("DEBUG: norm_required:", norm_required)
 
-        # Fetch candidates and their skills (do the matching in Python for flexible heuristics)
         candidates = self._fetch_all_candidates_with_skills()
         scored = []
 
         for cand in candidates:
             cand_skills = cand.get('skills') or []
-            # normalize candidate skills
             norm_cand_skills = [ _normalize_text(s) for s in cand_skills ]
             matched_skill_names = set()
 
             for i, r_raw in enumerate(required_skills):
-                r_norm = norm_required[i]
+                r_norm = norm_required[i] if i < len(norm_required) else _normalize_text(r_raw)
                 if not r_norm:
                     continue
 
-                # check against each candidate skill
                 for orig_skill, c_norm in zip(cand_skills, norm_cand_skills):
                     if not c_norm:
                         continue
                     matched = False
 
-                    # exact normalized match
                     if r_norm == c_norm:
                         matched = True
-
-                    # substring containment either way
                     elif r_norm in c_norm or c_norm in r_norm:
                         matched = True
-
                     else:
-                        # token overlap check
                         r_tokens = set(r_norm.split())
                         c_tokens = set(c_norm.split())
                         if r_tokens & c_tokens:
@@ -213,7 +295,6 @@ class CandidateAgent:
 
                     if matched:
                         matched_skill_names.add(orig_skill)
-                        # once this required skill matches a candidate skill, stop checking other candidate skills for this required skill
                         break
 
             matched_count = len(matched_skill_names)
@@ -228,6 +309,5 @@ class CandidateAgent:
                 if debug:
                     print(f"DEBUG matched for candidate {cand.get('name')}: {matched_skill_names}")
 
-        # sort by matchedSkillsCount descending and return top N
         scored_sorted = sorted(scored, key=lambda x: x["matchedSkillsCount"], reverse=True)
         return scored_sorted[:max_results]
