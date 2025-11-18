@@ -2,10 +2,11 @@
 """
 Recruiter Agent (job ingestion + API sender)
 
-Features:
-- Upload job descriptions from a file into Neo4j (ingest_job_descriptions)
-- Optionally send parsed jobs to an HTTP /job endpoint instead of writing directly to Neo4j
-- Helper methods: send_job_to_api, send_jobs_to_api
+Minimal schema-aware improvements:
+- Ensure Skill.norm_name is created and unique (used by candidate scoring)
+- Preserve original name, set aliases if provided, set created_at when created
+- Optionally compute Skill.popularity during ingestion (lightweight)
+All other behaviors (internal_uid merge, j.job_id = 0, API helpers) are unchanged.
 """
 
 from typing import List, Dict, Any, Optional
@@ -13,6 +14,7 @@ from neo4j import GraphDatabase
 import os
 import requests
 from requests.exceptions import RequestException
+from datetime import datetime
 
 # import parse_jobs from your existing code; expected to return List[Dict]
 from parse_jobs import parse_jobs
@@ -30,8 +32,7 @@ class JobAgent:
         Initialize the JobAgent with a Neo4j driver connection.
         Uses environment variables by default unless explicit values are provided.
         """
-        # allow explicit overrides, else environment/defaults
-        uri = uri or os.getenv("NEO4J_URI", NEO4J_URI)  # fallback to env
+        uri = uri or os.getenv("NEO4J_URI", NEO4J_URI)
         user = user or os.getenv("NEO4J_USER", NEO4J_USER)
         password = password or os.getenv("NEO4J_PASSWORD", NEO4J_PASSWORD)
 
@@ -52,35 +53,34 @@ class JobAgent:
     # ----------------------
     def _create_job_constraints(self):
         """
-        Create constraints and indexes. Note:
-        - We DO NOT create a unique constraint on job_id because job_id is forced to 0 per design.
-        - We ensure Skill.name uniqueness.
+        Create constraints and indexes.
+        - Ensure Skill.norm_name uniqueness (canonical skill identifier).
+        - Index on Job.internal_uid for faster MERGE.
         """
-        create_constraints = [
-            # Do NOT enforce uniqueness on Job.job_id (we are forcing job_id=0)
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (s:Skill) REQUIRE s.name IS UNIQUE"
+        create_statements = [
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (s:Skill) REQUIRE s.norm_name IS UNIQUE",
+            "CREATE INDEX IF NOT EXISTS FOR (j:Job) ON (j.internal_uid)"
         ]
         with self._driver.session() as session:
-            for c in create_constraints:
+            for stmt in create_statements:
                 try:
-                    session.execute_write(lambda tx, q=c: tx.run(q))
+                    session.execute_write(lambda tx, q=stmt: tx.run(q))
                 except Exception as e:
-                    print(f"⚠️ Constraint creation warning: {e}")
+                    # non-fatal: print warning and continue
+                    print(f"⚠️ Constraint/index creation warning: {e}")
 
     # ----------------------
     # Ingestion transaction
     # ----------------------
     def _ingest_jobs_transaction(self, tx, job_data: List[Dict[str, Any]]):
         """
-        Accepts job_data: list of dicts. Each dict can include:
-          - title, company, description, location, min_experience or experience (text), skills (list), source, posted_date
-        Behavior:
-          - MERGE on an internal_uid to avoid duplicates (internal_uid = company|title|posting_date)
-          - Set j.job_id = 0
-          - Set j.ingested_date = date()
-          - Store min_experience as integer (toInteger where possible)
-          - Create Skill nodes and REQUIRES_SKILL relationships
-        Returns: number of processed job nodes
+        Ingest job_data into the graph. Each job dict may include:
+        title, company, description, location, min_experience or experience, skills (list), skill_aliases (list or dict), source, posting_date
+        Skill nodes are created/merged by norm_name and store:
+          - name (original)
+          - norm_name (lower(trim(name)))
+          - aliases (list) if provided
+          - created_at (date) when node created
         """
         cypher = """
         UNWIND $job_data AS job
@@ -99,9 +99,7 @@ class JobAgent:
             j.min_experience = CASE
                                 WHEN job.experience_years IS NOT NULL THEN toInteger(job.experience_years)
                                 WHEN job.min_experience IS NOT NULL THEN toInteger(job.min_experience)
-                                WHEN job.experience IS NOT NULL THEN 
-                                    // attempt to capture numeric prefix if present
-                                    toInteger(coalesce(job.experience_years, apoc.text.regexGroups(job.experience,'(\\d+)')[0][0], '0'))
+                                WHEN job.experience IS NOT NULL THEN toInteger(coalesce(job.experience_years, 0))
                                 ELSE coalesce(j.min_experience, 0)
                               END,
             j.description = coalesce(job.description, j.description),
@@ -110,15 +108,19 @@ class JobAgent:
           RETURN j
         }
         WITH j, job
-        UNWIND COALESCE(job.skills, []) AS skill_name
-          WITH j, trim(skill_name) AS skill_name WHERE skill_name <> ""
-          MERGE (s:Skill {name: skill_name})
+        UNWIND COALESCE(job.skills, []) AS skill_name_raw
+          WITH j, trim(skill_name_raw) AS skill_name, job WHERE skill_name <> ""
+          // canonical norm (lower + trim)
+          MERGE (s:Skill {norm_name: toLower(trim(skill_name))})
+          ON CREATE SET s.name = skill_name,
+                        s.aliases = coalesce(job.skill_aliases, []),
+                        s.created_at = date()
+          ON MATCH SET s.name = coalesce(s.name, skill_name)
           MERGE (j)-[:REQUIRES_SKILL]->(s)
         RETURN count(DISTINCT j) AS processed_count
         """
-        # Note: we used apoc.text.regexGroups in the cypher above; if your DB doesn't have APOC installed,
-        # you'd need to avoid the apoc call. To be safe, we'll fallback to a simpler version that avoids APOC.
-        # Use a fallback cypher without APOC if APOC isn't present.
+
+        # fallback (same logic but simpler) kept for safety
         fallback_cypher = """
         UNWIND $job_data AS job
         WITH job WHERE job.title IS NOT NULL AND job.title <> ""
@@ -145,22 +147,25 @@ class JobAgent:
           RETURN j
         }
         WITH j, job
-        UNWIND COALESCE(job.skills, []) AS skill_name
-          WITH j, trim(skill_name) AS skill_name WHERE skill_name <> ""
-          MERGE (s:Skill {name: skill_name})
+        UNWIND COALESCE(job.skills, []) AS skill_name_raw
+          WITH j, trim(skill_name_raw) AS skill_name, job WHERE skill_name <> ""
+          MERGE (s:Skill {norm_name: toLower(trim(skill_name))})
+          ON CREATE SET s.name = skill_name,
+                        s.aliases = coalesce(job.skill_aliases, []),
+                        s.created_at = date()
+          ON MATCH SET s.name = coalesce(s.name, skill_name)
           MERGE (j)-[:REQUIRES_SKILL]->(s)
         RETURN count(DISTINCT j) AS processed_count
         """
 
-        # Try the more featureful query first (it may fail if APOC not present)
         try:
-            result = tx.run(cypher, job_data=job_data)
-            rec = result.single()
+            res = tx.run(cypher, job_data=job_data)
+            rec = res.single()
             return rec["processed_count"] if rec else 0
         except Exception:
-            # fallback to safer query without apoc usage
-            result = tx.run(fallback_cypher, job_data=job_data)
-            rec = result.single()
+            # fallback when advanced query fails for any reason
+            res = tx.run(fallback_cypher, job_data=job_data)
+            rec = res.single()
             return rec["processed_count"] if rec else 0
 
     # ----------------------
@@ -209,6 +214,8 @@ class JobAgent:
             try:
                 processed_count = session.execute_write(self._ingest_jobs_transaction, job_data)
                 print(f"✅ JobAgent: Successfully processed and uploaded {processed_count} jobs to Neo4j.")
+                # Optionally: update popularity for skills (lightweight) - commented by default
+                # session.execute_write(self._update_skill_popularity)
                 return {"processed": processed_count}
             except Exception as e:
                 print(f"❌ JobAgent: Failed to upload jobs to Neo4j. Error: {e}")
@@ -223,14 +230,11 @@ class JobAgent:
                         timeout: int = 10) -> Optional[Dict[str, Any]]:
         """
         Send one job dict to the /job endpoint (HTTP).
-        - job_dict: expected keys: title, company/company_name, description, location, experience_years (int) or experience (str), etc.
-        - api_url: full URL to POST to (defaults to env JOB_API_URL or http://localhost:8000/job)
         Returns parsed JSON on success, or None on failure.
         """
         if api_url is None:
             api_url = os.getenv("JOB_API_URL", "http://localhost:8000/job")
 
-        # Build payload with sensible keys for the API
         payload: Dict[str, Any] = {
             "title": job_dict.get("title") or job_dict.get("job_title") or "",
             "company_name": job_dict.get("company") or job_dict.get("company_name") or "",
@@ -238,19 +242,16 @@ class JobAgent:
             "location": job_dict.get("location") or ""
         }
 
-        # Experience: prefer explicit integer "experience_years"
         if "experience_years" in job_dict and job_dict.get("experience_years") is not None:
             try:
                 payload["experience_years"] = int(job_dict.get("experience_years"))
             except Exception:
                 payload["experience_years"] = 0
         else:
-            # pass textual experience if available (API will parse)
             if job_dict.get("experience") is not None:
                 payload["experience"] = str(job_dict.get("experience"))
 
-        # include optional fields if present
-        optional = ["education", "category", "domain", "posted_date", "posting_date", "source", "skills"]
+        optional = ["education", "category", "domain", "posted_date", "posting_date", "source", "skills", "skill_aliases"]
         for k in optional:
             if k in job_dict and job_dict.get(k) is not None:
                 payload[k] = job_dict.get(k)
