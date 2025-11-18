@@ -10,9 +10,9 @@ import ast
 from parse_jobs import _split_skills
 
 # --- CONFIGURATION (Ensure these match your recruiter_agent.py) ---
-NEO4J_URI = os.getenv("NEO4J_URI", "neo4j+s://d0ee583f.databases.neo4j.io")
+NEO4J_URI = os.getenv("NEO4J_URI", "neo4j+s://ba7d2a6a.databases.neo4j.io")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "qA4mwmqaJbdqQ8BQwU2xUhMnNjG5_OJc01IcXJMc4sU")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "9d20zR-GV-LV43mTEOXlrO-nO_aWR3T0RjpCMSHzOYY")
 # ------------------------------------------------------------------
 
 
