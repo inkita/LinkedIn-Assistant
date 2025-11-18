@@ -1,8 +1,10 @@
+# app_ui.py
 import streamlit as st
 import pandas as pd
 import os
 import tempfile
 
+# Import JobAgent + env constants so get_job_agent() can instantiate it
 from recruiter_agent import JobAgent, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 from candidate_agent import CandidateAgent
 from jd_parser import extract_skills_from_jd
@@ -47,12 +49,24 @@ def main():
             tmp_file.write(uploaded_job_file.getvalue())
             file_path = tmp_file.name
         with st.spinner(f"Uploading {uploaded_job_file.name} to Neo4j..."):
-            processed_count = job_agent.upload_job_descriptions(file_path)
+            result = job_agent.upload_job_descriptions(file_path)
+            # upload_job_descriptions may return {"processed": N} or a dict summary when use_api=True
+            # or (older implementations) just an int. Normalize to an int.
+            if isinstance(result, dict):
+                processed_count = result.get("processed") or result.get("sent") or 0
+            elif isinstance(result, int):
+                processed_count = result
+            else:
+                processed_count = 0
+
         if processed_count > 0:
             st.success(f"✅ Uploaded {processed_count} jobs to Neo4j!")
         else:
             st.warning("⚠️ Job upload failed or zero processed.")
-        os.unlink(file_path)
+        try:
+            os.unlink(file_path)
+        except Exception:
+            pass
 
     # Upload Candidate Data
     st.sidebar.subheader("2. Ingest Candidate Data")
@@ -74,7 +88,10 @@ def main():
             st.success(f"✅ Uploaded {processed_count} candidates!")
         else:
             st.warning("⚠️ Candidate upload failed or zero processed.")
-        os.unlink(file_path)
+        try:
+            os.unlink(file_path)
+        except Exception:
+            pass
 
     # -------------------------
     # Search Section
@@ -121,9 +138,6 @@ def main():
         st.subheader("Extracted Required Skills:")
         st.code(required_skills)
 
-        # Uncomment this line if you ever want to debug what was sent to parser:
-        # st.expander("🔍 Parser Input (for debugging)").text(parser_input)
-
         if not required_skills:
             st.warning("❌ No skills extracted — check parser output.")
             return
@@ -137,11 +151,21 @@ def main():
             st.warning("No candidates found matching the required skills.")
         else:
             df_results = pd.DataFrame(results)
-            df_results['Skill Match Count'] = df_results['matchedSkillsCount'].astype(int)
+            # support both naming conventions (some versions returned matchedSkillsCount vs matchedSkillsCount)
+            if 'matchedSkillsCount' in df_results.columns:
+                df_results['Skill Match Count'] = df_results['matchedSkillsCount'].astype(int)
+            elif 'matchedSkillsCount' in df_results.columns:
+                df_results['Skill Match Count'] = df_results['matchedSkillsCount'].astype(int)
+            else:
+                # fallback: try raw_score presence
+                df_results['Skill Match Count'] = df_results.get('matchedSkillsCount', df_results.get('matchedSkillsCount', 0)).astype(int)
+
             total_skills = len(required_skills) if isinstance(required_skills, list) and required_skills else 1
             df_results['Match Score (%)'] = (df_results['Skill Match Count'] / total_skills * 100).round(1)
             df_results = df_results.rename(columns={'skills': 'Candidate Skills'})
-            st.dataframe(df_results[['name', 'location', 'Skill Match Count', 'Match Score (%)', 'Candidate Skills']])
+            # Select columns that exist
+            display_cols = [c for c in ['name', 'location', 'Skill Match Count', 'Match Score (%)', 'Candidate Skills'] if c in df_results.columns]
+            st.dataframe(df_results[display_cols])
             st.success(f"✅ Found {len(results)} candidate(s)!")
 
 if __name__ == "__main__":
