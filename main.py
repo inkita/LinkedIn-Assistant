@@ -409,11 +409,18 @@ def compute_similarity_node(state: Dict) -> Dict:
     
     st.write(f"✅ Scored {len(results)} job matches")
     print("------------------")
+    print(f"Candidate: {state.get('candidate_name', 'N/A')}")
+    print(f"Skills: {', '.join(candidate_skills)}")
+    print(f"Domain: {domain}")
+    print("------------------")
     print(f"Top 5 matches:")
     for match in state["job_matches"][:5]:
+        job_skills_str = ', '.join(match.get('overlap_skills', [])[:5])  # Show first 5 for brevity
+        if len(match.get('overlap_skills', [])) > 5:
+            job_skills_str += '...'
         print(f"  {match['title']} @ {match['company']}: {match['match_score']} "
               f"(J={match['breakdown']['jaccard']}, S={match['breakdown']['semantic']}, "
-              f"G={match['breakdown']['guttman']})")
+              f"G={match['breakdown']['guttman']}) | Skills: [{job_skills_str}]")
     
     return state
 
