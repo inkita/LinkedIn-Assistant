@@ -90,7 +90,7 @@ def create_candidate_node(state: Dict) -> Dict:
         "email": state["candidate_email"],
         "name": state.get("candidate_name", ""),
         "text": state["resume_text"],
-        "category": "technology"
+        "category": state.get("candidate_domain", "technology")  # Use selected domain
     }
     response = requests.post(API_URL, json=payload)
     if response.status_code != 200:
@@ -488,6 +488,7 @@ def main():
     uploaded_file = st.sidebar.file_uploader("📄 Upload Resume (PDF)", type=["pdf"])
     email = st.sidebar.text_input("📧 Candidate Email")
     name = st.sidebar.text_input("👤 Candidate Name")
+    domain = st.sidebar.selectbox("🏢 Domain", options=["technology", "sales"], index=0)
 
     if uploaded_file and email:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -500,6 +501,7 @@ def main():
             "pdf_path": pdf_path,
             "candidate_email": email,
             "candidate_name": name,
+            "candidate_domain": domain,
             "user_input": user_query
         }
 
