@@ -158,7 +158,26 @@ def n_extract_resume(state: State) -> State:
                 
                 # Classify domain from resume content (validate parsed domain if provided)
                 from ollama_extractor import _classify_domain
-                resume_domain = _classify_domain(text, parsed_domain)
+                # Try to extract job title from resume (for domain classification)
+                import re
+                job_title = ""
+                lines = text.split('\n')[:10]
+                for line in lines:
+                    line_lower = line.lower().strip()
+                    if not line_lower or '@' in line_lower or 'email' in line_lower or 'phone' in line_lower:
+                        continue
+                    if any(kw in line_lower for kw in ['title', 'position', 'role', 'current role']):
+                        parts = re.split(r'[:|•]', line, maxsplit=1)
+                        if len(parts) > 1:
+                            job_title = parts[1].strip()
+                            break
+                    elif len(line.strip()) < 60 and line.strip() and not re.search(r'\d{3}[-.]?\d{3}[-.]?\d{4}', line):
+                        title_indicators = ['developer', 'engineer', 'manager', 'sales', 'executive', 'analyst', 
+                                          'specialist', 'consultant', 'architect', 'administrator', 'director']
+                        if any(indicator in line_lower for indicator in title_indicators):
+                            job_title = line.strip()
+                            break
+                resume_domain = _classify_domain(text=text, existing_domain=parsed_domain, job_title=job_title)
                 if resume_domain in ["sales", "technology"]:
                     data["domain"] = resume_domain
                 else:
@@ -168,12 +187,30 @@ def n_extract_resume(state: State) -> State:
                 extractions.append(data)
             except Exception as e:
                 log(f"  Error extracting resume {idx+1}: {e}")
-                # Still add with parsed data if available, but classify domain
-                from ollama_extractor import _classify_domain
-                resume_domain = _classify_domain(text, parsed_domain)
-                if resume_domain not in ["sales", "technology"]:
-                    resume_domain = ""
-                # Get experience from file if available
+            # Still add with parsed data if available, but classify domain
+            from ollama_extractor import _classify_domain
+            import re
+            job_title = ""
+            lines = text.split('\n')[:10]
+            for line in lines:
+                line_lower = line.lower().strip()
+                if not line_lower or '@' in line_lower or 'email' in line_lower or 'phone' in line_lower:
+                    continue
+                if any(kw in line_lower for kw in ['title', 'position', 'role', 'current role']):
+                    parts = re.split(r'[:|•]', line, maxsplit=1)
+                    if len(parts) > 1:
+                        job_title = parts[1].strip()
+                        break
+                elif len(line.strip()) < 60 and line.strip() and not re.search(r'\d{3}[-.]?\d{3}[-.]?\d{4}', line):
+                    title_indicators = ['developer', 'engineer', 'manager', 'sales', 'executive', 'analyst', 
+                                      'specialist', 'consultant', 'architect', 'administrator', 'director']
+                    if any(indicator in line_lower for indicator in title_indicators):
+                        job_title = line.strip()
+                        break
+            resume_domain = _classify_domain(text=text, existing_domain=parsed_domain, job_title=job_title)
+            if resume_domain not in ["sales", "technology"]:
+                resume_domain = ""
+            # Get experience from file if available
                 parsed_experience = resume_data.get("experience", "")
                 parsed_years = resume_data.get("experience_years", 0)
                 extractions.append({
@@ -337,8 +374,9 @@ def n_extract_jobs(state: State) -> State:
         # But validate it's either "sales" or "technology"
         raw_domain = j.get("domain") or job.get("domain") or job.get("category", "")
         from ollama_extractor import _classify_domain
-        job_text = f"{job.get('title', '')} {job.get('description', '')}"
-        classified_domain = _classify_domain(job_text, raw_domain)
+        job_title = job.get('title', '')
+        job_text = f"{job_title} {job.get('description', '')}"
+        classified_domain = _classify_domain(text=job_text, existing_domain=raw_domain, job_title=job_title)
         if classified_domain in ["sales", "technology"]:
             j["domain"] = classified_domain
         else:

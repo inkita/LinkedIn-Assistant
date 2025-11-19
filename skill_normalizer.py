@@ -6,13 +6,15 @@ from typing import Dict, Any, Tuple, Optional
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer, util
 from neo4j import GraphDatabase
+import torch
 
 load_dotenv()
 
 SIM_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.85"))
 
 # Load once per process
-model = SentenceTransformer("all-MiniLM-L6-v2")
+DEVICE = os.getenv("SKILL_NORMALIZER_DEVICE", "cpu").lower()
+model = SentenceTransformer("all-MiniLM-L6-v2", device=DEVICE)
 
 def _clean(s: str) -> str:
     """Clean and normalize skill name to lowercase."""
@@ -54,7 +56,8 @@ class SkillNormalizer:
         
         # Encode the skill
         vec = model.encode(cleaned, convert_to_tensor=True)
-        embedding_list = vec.cpu().tolist()
+        vec = vec.to(DEVICE)
+        embedding_list = vec.detach().cpu().tolist()
         
         with self.lock:
             # STEP 1: Check database FIRST (most authoritative)
@@ -68,8 +71,7 @@ class SkillNormalizer:
                     best_embedding = db_match_embedding
                     # Cache the database match
                     if db_match_embedding:
-                        import torch
-                        db_vec_tensor = torch.tensor(db_match_embedding)
+                        db_vec_tensor = torch.tensor(db_match_embedding, device=vec.device)
                         self.local_cache[db_match] = (db_match, db_vec_tensor)
             
             # STEP 2: If no DB match, check local cache for similar skills
@@ -77,6 +79,9 @@ class SkillNormalizer:
                 best_sim = threshold
                 for cached_cleaned, (cached_canon, cached_vec) in self.local_cache.items():
                     if cached_vec is not None:
+                        if cached_vec.device != vec.device:
+                            cached_vec = cached_vec.to(vec.device)
+                            self.local_cache[cached_cleaned] = (cached_canon, cached_vec)
                         sim = util.cos_sim(vec, cached_vec).item()
                         if sim > best_sim:
                             best_sim = sim
@@ -103,9 +108,9 @@ class SkillNormalizer:
         """Check if a skill with this norm_name exists in DB (case-insensitive)."""
         try:
             with self.driver.session() as session:
-                # Use CASE to handle missing properties gracefully
+                # Use OPTIONAL MATCH to avoid warnings when Skill label doesn't exist yet
                 result = session.run(
-                    "MATCH (s:Skill) "
+                    "OPTIONAL MATCH (s:Skill) "
                     "WHERE s.norm_name IS NOT NULL AND toLower(s.norm_name) = toLower($norm_name) "
                     "RETURN s.norm_name as norm_name "
                     "LIMIT 1",
@@ -128,7 +133,8 @@ class SkillNormalizer:
         try:
             with self.driver.session() as session:
                 # First check if any Skill nodes exist at all
-                count_result = session.run("MATCH (s:Skill) RETURN count(s) as count")
+                # Use OPTIONAL MATCH to avoid warnings when label doesn't exist yet
+                count_result = session.run("OPTIONAL MATCH (s:Skill) RETURN count(s) as count")
                 count_record = count_result.single()
                 if not count_record or count_record["count"] == 0:
                     # No skills exist yet, return None
@@ -136,9 +142,9 @@ class SkillNormalizer:
                 
                 # Check for exact match by norm_name (case-insensitive comparison)
                 # Also check if cleaned_skill is in aliases (case-insensitive)
-                # Use COALESCE to handle missing properties
+                # Use OPTIONAL MATCH to avoid warnings when Skill label doesn't exist yet
                 exact_match = session.run(
-                    "MATCH (s:Skill) "
+                    "OPTIONAL MATCH (s:Skill) "
                     "WHERE s.norm_name IS NOT NULL AND ("
                     "  toLower(s.norm_name) = toLower($skill) "
                     "  OR ($skill IN COALESCE(s.aliases, [])) "
@@ -156,8 +162,9 @@ class SkillNormalizer:
                 
                 # If no exact match, check by embedding similarity
                 # Get ALL skills with embeddings for similarity checking
+                # Use OPTIONAL MATCH to avoid warnings when Skill label doesn't exist yet
                 all_skills = session.run(
-                    "MATCH (s:Skill) "
+                    "OPTIONAL MATCH (s:Skill) "
                     "WHERE s.norm_name IS NOT NULL "
                     "RETURN s.norm_name as norm_name, "
                     "       COALESCE(s.embedding, null) as embedding, "
@@ -189,8 +196,7 @@ class SkillNormalizer:
                     # Compare embeddings (only if embedding exists and is valid)
                     if db_embedding and isinstance(db_embedding, list) and len(db_embedding) > 0:
                         try:
-                            import torch
-                            db_vec = torch.tensor(db_embedding)
+                            db_vec = torch.tensor(db_embedding, device=vec.device)
                             sim = util.cos_sim(vec, db_vec).item()
                             if sim > best_sim:
                                 best_sim = sim
