@@ -1,0 +1,70 @@
+{
+  "original_score": 0.5485714285714286,
+  "original_candidate": {
+    "id": "0cceb158-d5a7-4185-9a7f-b3203187bf00",
+    "name": "Kevin Robinson",
+    "title": "Unknown",
+    "skills": [
+      "python",
+      "react",
+      "docker",
+      "kubernetes",
+      "sql",
+      "postgresql",
+      "linux"
+    ],
+    "years_experience": 0
+  },
+  "degradation_steps": [
+    {
+      "type": "title",
+      "value": "Junior Developer"
+    },
+    {
+      "type": "remove_skill",
+      "value": "python"
+    },
+    {
+      "type": "remove_skill",
+      "value": "docker"
+    },
+    {
+      "type": "reduce_experience",
+      "years": 3
+    }
+  ],
+  "decay_metrics": [
+    {
+      "step": 1,
+      "score": 0.5485714285714286,
+      "absolute_decay": 0.0,
+      "percentage_decay": 0.0,
+      "cumulative_decay": 0.0
+    },
+    {
+      "step": 2,
+      "score": 0.46285714285714286,
+      "absolute_decay": 0.08571428571428574,
+      "percentage_decay": 15.625000000000005,
+      "cumulative_decay": 15.625000000000005
+    },
+    {
+      "step": 3,
+      "score": 0.3771428571428571,
+      "absolute_decay": 0.08571428571428574,
+      "percentage_decay": 18.518518518518526,
+      "cumulative_decay": 31.25000000000001
+    },
+    {
+      "step": 4,
+      "score": 0.3771428571428571,
+      "absolute_decay": 0.0,
+      "percentage_decay": 0.0,
+      "cumulative_decay": 31.25000000000001
+    }
+  ],
+  "critical_point": null,
+  "final_score": 0.3771428571428571,
+  "total_degradation": 0.17142857142857149,
+  "total_degradation_percentage": 31.25000000000001
+}

@@ -1,0 +1,17 @@
+{
+  "timestamp": "20251206_155627",
+  "degradation_test": {
+    "original_score": 0.5485714285714286,
+    "final_score": 0.3771428571428571,
+    "score_drop": 0.17142857142857149,
+    "score_drop_percentage": 31.25000000000001,
+    "critical_point": null,
+    "total_steps": 4
+  },
+  "explainability_test": {
+    "total_tests": 561,
+    "mentions_missing_skills_rate": 0.661319073083779,
+    "mentions_skill_coverage_rate": 0.9928698752228164,
+    "average_alignment_score": 0.9340463458110517
+  }
+}
