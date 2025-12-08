@@ -1,6 +1,6 @@
 # LinkedIn-Assistant
 
-This directory contains the scripts and workflows used to preprocess raw job and candidate datasets into clean, structured, and linkable representations for downstream modeling and knowledge-graph construction.
+This directory contains the scriptsto preprocess raw job and candidate datasets into clean, structured, and linkable representations for downstream modeling and knowledge-graph construction.
 
 ## Overview
 
