@@ -1,0 +1,38 @@
+{
+  "entities": {
+    "Domain": [
+      "id",
+      "name"
+    ],
+    "Job": [
+      "id",
+      "company",
+      "title",
+      "location",
+      "experience",
+      "education",
+      "posting_date"
+    ],
+    "Skill": [
+      "id",
+      "name",
+      "norm_name",
+      "aliases",
+      "embedding",
+      "created_at"
+    ],
+    "Candidate": [
+      "id",
+      "name",
+      "email",
+      "experience",
+      "education"
+    ]
+  },
+  "relationships": {
+    "HAS_JOB":        { "from": "Domain",  "to": "Job" },
+    "REQUIRES_SKILL": { "from": "Job",       "to": "Skill" },
+    "HAS_SKILL":      { "from": "Candidate", "to": "Skill" }
+  }
+}
+  

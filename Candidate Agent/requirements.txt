@@ -1,0 +1,26 @@
+# requirements.txt
+
+# === Core Frameworks ===
+streamlit>=1.36.0
+langchain>=0.2.0
+langchain-community>=0.2.0
+
+# === LLM + Embeddings ===
+sentence-transformers>=2.2.2
+
+# === PDF Parsing ===
+PyMuPDF>=1.24.0
+
+# === Knowledge Graph (Neo4j) ===
+neo4j>=5.16.0
+
+# === Utilities ===
+numpy>=1.26.0
+pandas>=2.2.2
+tqdm>=4.66.1
+
+# === Optional (for fuzzy string matching / cleanup) ===
+rapidfuzz>=3.6.1
+
+# === Local LLM Backend ===
+ollama>=0.1.0
